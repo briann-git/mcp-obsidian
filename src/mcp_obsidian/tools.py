@@ -630,3 +630,76 @@ class RecentChangesToolHandler(ToolHandler):
                 text=json.dumps(results, indent=2)
             )
         ]
+
+class SearchByTagsToolHandler(ToolHandler):
+    def __init__(self):
+        super().__init__("obsidian_search_by_tags")
+
+    def get_tool_description(self):
+        return Tool(
+            name=self.name,
+            description="""Search for notes in the vault by one or more tags using Dataview.
+            Returns matching note paths and their tags, sorted by most recently modified.
+
+            Use this tool when you want to find all notes tagged with specific tags.
+            Tags can be provided with or without the leading '#'.
+
+            Examples:
+            - Find all notes tagged #project/vault-v5: tags=["project/vault-v5"]
+            - Find notes with BOTH tags: tags=["status/active", "area/work"], match_all=true
+            - Find notes with ANY of the tags: tags=["topic/python", "topic/rust"], match_all=false
+            """,
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "tags": {
+                        "type": "array",
+                        "items": {
+                            "type": "string",
+                            "description": "A tag to search for (with or without leading '#')"
+                        },
+                        "description": "List of tags to search for",
+                        "minItems": 1
+                    },
+                    "match_all": {
+                        "type": "boolean",
+                        "description": "If true, notes must contain ALL specified tags (AND). If false, notes matching ANY tag are returned (OR). Default: true.",
+                        "default": True
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of results to return (default: 50)",
+                        "default": 50,
+                        "minimum": 1,
+                        "maximum": 500
+                    }
+                },
+                "required": ["tags"]
+            }
+        )
+
+    def run_tool(self, args: dict) -> Sequence[TextContent | ImageContent | EmbeddedResource]:
+        if "tags" not in args:
+            raise RuntimeError("tags argument missing in arguments")
+
+        tags = args["tags"]
+        if not isinstance(tags, list) or len(tags) == 0:
+            raise RuntimeError("tags must be a non-empty list of strings")
+
+        match_all = args.get("match_all", True)
+        if not isinstance(match_all, bool):
+            raise RuntimeError(f"Invalid match_all: {match_all}. Must be a boolean")
+
+        limit = args.get("limit", 50)
+        if not isinstance(limit, int) or limit < 1:
+            raise RuntimeError(f"Invalid limit: {limit}. Must be a positive integer")
+
+        api = obsidian.Obsidian(api_key=api_key, host=obsidian_host)
+        results = api.search_by_tags(tags, match_all, limit)
+
+        return [
+            TextContent(
+                type="text",
+                text=json.dumps(results, indent=2)
+            )
+        ]

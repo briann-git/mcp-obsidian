@@ -289,3 +289,50 @@ class Obsidian():
             return response.json()
 
         return self._safe_call(call_fn)
+
+    def search_by_tags(self, tags: list[str], match_all: bool = True, limit: int = 50) -> Any:
+        """Search for notes by one or more tags using JsonLogic search.
+        
+        Matches tags in both frontmatter (YAML list items) and inline (#tag) format.
+        
+        Args:
+            tags: List of tags to search for (with or without leading #)
+            match_all: If True, notes must have ALL tags (AND). If False, ANY tag matches (OR).
+            limit: Maximum number of results to return (default: 50)
+            
+        Returns:
+            List of matching notes with their paths
+        """
+        import re as _re
+
+        # Normalize tags: strip leading # if present
+        normalized = []
+        for tag in tags:
+            t = tag.strip().lstrip("#")
+            normalized.append(t)
+
+        # Build a regex condition per tag that matches both:
+        #   - inline tags: #tagname (word boundary after)
+        #   - frontmatter YAML list items: "- tagname" 
+        tag_conditions = []
+        for t in normalized:
+            escaped = _re.escape(t)
+            pattern = f"(#{ escaped }\\b|\\-\\s+{ escaped }\\s)"
+            tag_conditions.append({"regexp": [pattern, {"var": "content"}]})
+
+        # Combine conditions with AND or OR
+        if match_all:
+            logic = {"and": [{"glob": ["*.md", {"var": "path"}]}] + tag_conditions}
+        else:
+            logic = {"and": [
+                {"glob": ["*.md", {"var": "path"}]},
+                {"or": tag_conditions}
+            ]}
+
+        results = self.search_json(logic)
+
+        # Truncate to limit
+        if len(results) > limit:
+            results = results[:limit]
+
+        return results
