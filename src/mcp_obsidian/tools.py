@@ -821,6 +821,15 @@ class GetCatalogToolHandler(ToolHandler):
         else:
             result = catalog
 
+        # Check inbox for items added since the catalog was built
+        pending_inbox = indexer.check_inbox_delta(api, catalog)
+        if pending_inbox:
+            result["pending_inbox"] = {
+                "note": "These inbox items were added after the catalog was last built.",
+                "count": len(pending_inbox),
+                "items": pending_inbox,
+            }
+
         return [
             TextContent(
                 type="text",

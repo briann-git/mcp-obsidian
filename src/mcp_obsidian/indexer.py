@@ -271,6 +271,47 @@ def build_catalog(api: Any) -> dict:
     return catalog
 
 
+def check_inbox_delta(api: Any, catalog: dict) -> list[dict]:
+    """Check for inbox files not yet in the catalog.
+
+    Compares the current 00-inbox/ listing against what the catalog knows about.
+    Returns metadata for any new files found (without triggering a full rebuild).
+
+    Args:
+        api: Obsidian API client
+        catalog: Current catalog dict
+
+    Returns:
+        List of dicts with path/summary for new inbox items, empty if none.
+    """
+    try:
+        inbox_files = api.list_files_in_dir("00-inbox")
+    except Exception:
+        return []
+
+    inbox_md = [f for f in inbox_files if f.endswith(".md")]
+    cataloged_paths = {n["path"] for n in catalog.get("notes", [])}
+    new_files = [f for f in inbox_md if f not in cataloged_paths]
+
+    if not new_files:
+        return []
+
+    pending = []
+    for filepath in new_files:
+        try:
+            content = api.get_file_contents(filepath)
+        except Exception:
+            content = ""
+        fm, body = parse_frontmatter(content)
+        pending.append({
+            "path": filepath,
+            "tags": fm.get("tags", []) or [],
+            "summary": extract_summary(body),
+        })
+
+    return pending
+
+
 def filter_catalog(
     catalog: dict,
     category: str | None = None,
