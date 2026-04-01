@@ -55,6 +55,10 @@ add_tool_handler(tools.PeriodicNotesToolHandler())
 add_tool_handler(tools.RecentPeriodicNotesToolHandler())
 add_tool_handler(tools.RecentChangesToolHandler())
 add_tool_handler(tools.SearchByTagsToolHandler())
+add_tool_handler(tools.BuildCatalogToolHandler())
+add_tool_handler(tools.GetCatalogToolHandler())
+add_tool_handler(tools.GetConcernStateToolHandler())
+add_tool_handler(tools.GetMeetingSeriesToolHandler())
 
 @app.list_tools()
 async def list_tools() -> list[Tool]:

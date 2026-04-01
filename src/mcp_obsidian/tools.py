@@ -8,6 +8,7 @@ from mcp.types import (
 import json
 import os
 from . import obsidian
+from . import indexer
 
 api_key = os.getenv("OBSIDIAN_API_KEY", "")
 obsidian_host = os.getenv("OBSIDIAN_HOST", "127.0.0.1")
@@ -701,5 +702,251 @@ class SearchByTagsToolHandler(ToolHandler):
             TextContent(
                 type="text",
                 text=json.dumps(results, indent=2)
+            )
+        ]
+
+
+class BuildCatalogToolHandler(ToolHandler):
+    def __init__(self):
+        super().__init__("obsidian_build_catalog")
+
+    def get_tool_description(self):
+        return Tool(
+            name=self.name,
+            description="""Build (or rebuild) the vault catalog index at _system/catalog.json.
+
+            The catalog provides a machine-readable overview of every note in the vault:
+            path, type, tags, status, concern, revision number, and a 1-line summary.
+            It also includes pre-built indexes for concerns and meeting series.
+
+            Call this tool to refresh the catalog after making changes to the vault,
+            or periodically to keep it current. The catalog enables efficient vault
+            orientation without reading individual files.""",
+            inputSchema={
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        )
+
+    def run_tool(self, args: dict) -> Sequence[TextContent | ImageContent | EmbeddedResource]:
+        api = obsidian.Obsidian(api_key=api_key, host=obsidian_host)
+        catalog = indexer.build_catalog(api)
+
+        # Write catalog to vault
+        catalog_json = json.dumps(catalog, indent=2, ensure_ascii=False)
+        api.put_content(indexer.CATALOG_PATH, catalog_json)
+
+        stats = catalog["vault_stats"]
+        return [
+            TextContent(
+                type="text",
+                text=(
+                    f"Catalog built and saved to {indexer.CATALOG_PATH}.\n"
+                    f"Indexed {stats['total_notes']} notes, "
+                    f"{stats['concerns']} concerns, "
+                    f"{stats['meeting_series']} meeting series, "
+                    f"{len(stats['tags'])} unique tags."
+                )
+            )
+        ]
+
+
+class GetCatalogToolHandler(ToolHandler):
+    def __init__(self):
+        super().__init__("obsidian_get_catalog")
+
+    def get_tool_description(self):
+        return Tool(
+            name=self.name,
+            description="""Read the vault catalog index. Returns a structured overview of all notes
+            without reading individual files. Use this as your FIRST step when orienting
+            to the vault — it tells you what exists, where it is, and what it's about.
+
+            Optional filters narrow results to specific categories, tags, concerns, or statuses.
+            With no filters, returns the full catalog including concern and meeting series indexes.""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "category": {
+                        "type": "string",
+                        "description": "Filter by category: project/work, project/personal, area, daily-log, weekly-planning, people, resource, archive, inbox, system",
+                        "enum": ["project/work", "project/personal", "area", "daily-log", "weekly-planning", "people", "resource", "archive", "inbox", "system"]
+                    },
+                    "tags": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Filter to notes having ANY of these tags"
+                    },
+                    "concern": {
+                        "type": "string",
+                        "description": "Filter by concern slug (e.g. 'octoslides', 'self-governance')"
+                    },
+                    "status": {
+                        "type": "string",
+                        "description": "Filter by note status",
+                        "enum": ["draft", "active", "scheduled", "completed", "archived"]
+                    }
+                },
+                "required": []
+            }
+        )
+
+    def run_tool(self, args: dict) -> Sequence[TextContent | ImageContent | EmbeddedResource]:
+        api = obsidian.Obsidian(api_key=api_key, host=obsidian_host)
+
+        try:
+            raw = api.get_file_contents(indexer.CATALOG_PATH)
+            catalog = json.loads(raw)
+        except Exception:
+            return [
+                TextContent(
+                    type="text",
+                    text="No catalog found. Run obsidian_build_catalog first to generate it."
+                )
+            ]
+
+        has_filter = any(
+            args.get(k) for k in ["category", "tags", "concern", "status"]
+        )
+
+        if has_filter:
+            result = indexer.filter_catalog(
+                catalog,
+                category=args.get("category"),
+                tags=args.get("tags"),
+                concern=args.get("concern"),
+                status=args.get("status"),
+            )
+        else:
+            result = catalog
+
+        return [
+            TextContent(
+                type="text",
+                text=json.dumps(result, indent=2)
+            )
+        ]
+
+
+class GetConcernStateToolHandler(ToolHandler):
+    def __init__(self):
+        super().__init__("obsidian_get_concern_state")
+
+    def get_tool_description(self):
+        return Tool(
+            name=self.name,
+            description="""Read the full current state of a concern (project, area, meeting, etc.)
+            by loading its base file and all revisions in order.
+
+            Returns structured content: each file's metadata and full text, ordered by
+            revision number. This replaces the need to manually list a folder, identify
+            files, and read them one by one.
+
+            Use the concern_path from the catalog's concern index or note entries.""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "concern_path": {
+                        "type": "string",
+                        "description": "Path to the concern folder (e.g. '01-projects/work/octoslides')"
+                    }
+                },
+                "required": ["concern_path"]
+            }
+        )
+
+    def run_tool(self, args: dict) -> Sequence[TextContent | ImageContent | EmbeddedResource]:
+        if "concern_path" not in args:
+            raise RuntimeError("concern_path argument missing")
+
+        api = obsidian.Obsidian(api_key=api_key, host=obsidian_host)
+        result = indexer.build_concern_state(api, args["concern_path"])
+
+        return [
+            TextContent(
+                type="text",
+                text=json.dumps(result, indent=2)
+            )
+        ]
+
+
+class GetMeetingSeriesToolHandler(ToolHandler):
+    def __init__(self):
+        super().__init__("obsidian_get_meeting_series")
+
+    def get_tool_description(self):
+        return Tool(
+            name=self.name,
+            description="""Get all instances of a meeting series from the catalog.
+
+            Returns a list of meeting occurrences sorted by date (most recent first),
+            including the folder path and whether post-meeting notes exist.
+
+            Use this for meeting prep — find the last 2-3 instances, then use
+            obsidian_get_concern_state on each folder to read the full meeting content.""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "series_slug": {
+                        "type": "string",
+                        "description": "The meeting series slug (e.g. 'chris-1on1', 'james-h-crocodial')"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of instances to return (default: 5, most recent first)",
+                        "default": 5,
+                        "minimum": 1,
+                        "maximum": 50
+                    }
+                },
+                "required": ["series_slug"]
+            }
+        )
+
+    def run_tool(self, args: dict) -> Sequence[TextContent | ImageContent | EmbeddedResource]:
+        if "series_slug" not in args:
+            raise RuntimeError("series_slug argument missing")
+
+        api = obsidian.Obsidian(api_key=api_key, host=obsidian_host)
+
+        try:
+            raw = api.get_file_contents(indexer.CATALOG_PATH)
+            catalog = json.loads(raw)
+        except Exception:
+            return [
+                TextContent(
+                    type="text",
+                    text="No catalog found. Run obsidian_build_catalog first to generate it."
+                )
+            ]
+
+        series_slug = args["series_slug"]
+        limit = args.get("limit", 5)
+        all_series = catalog.get("meeting_series", {})
+
+        if series_slug not in all_series:
+            available = list(all_series.keys())
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps({
+                        "error": f"Meeting series '{series_slug}' not found in catalog.",
+                        "available_series": available
+                    }, indent=2)
+                )
+            ]
+
+        instances = all_series[series_slug][:limit]
+
+        return [
+            TextContent(
+                type="text",
+                text=json.dumps({
+                    "series": series_slug,
+                    "total_instances": len(all_series[series_slug]),
+                    "returned": len(instances),
+                    "instances": instances
+                }, indent=2)
             )
         ]
