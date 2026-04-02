@@ -147,6 +147,38 @@ def detect_meeting_series(path: str) -> tuple[str, str]:
     return "", ""
 
 
+def _walk_vault(api: Any) -> list[str]:
+    """Recursively list all files in the vault.
+
+    The Obsidian REST API's list endpoints only return immediate children.
+    Directories end with '/'. We recurse into them to get a flat file list.
+    """
+    all_files: list[str] = []
+    dirs_to_visit = [""]
+
+    while dirs_to_visit:
+        current = dirs_to_visit.pop()
+        try:
+            if current:
+                entries = api.list_files_in_dir(current)
+            else:
+                entries = api.list_files_in_vault()
+        except Exception:
+            continue
+
+        for entry in entries:
+            if entry.endswith("/"):
+                # It's a directory — queue for recursive visit
+                subdir = (current + "/" + entry.rstrip("/")) if current else entry.rstrip("/")
+                dirs_to_visit.append(subdir)
+            else:
+                # It's a file — build the full path
+                full_path = (current + "/" + entry) if current else entry
+                all_files.append(full_path)
+
+    return all_files
+
+
 def build_catalog(api: Any) -> dict:
     """Build the full vault catalog by walking all notes.
 
@@ -156,7 +188,7 @@ def build_catalog(api: Any) -> dict:
     Returns:
         Catalog dictionary ready to be serialized to JSON
     """
-    files = api.list_files_in_vault()
+    files = _walk_vault(api)
     md_files = sorted([f for f in files if f.endswith(".md")])
 
     notes = []
@@ -371,9 +403,12 @@ def get_concern_files(api: Any, concern_path: str) -> list[dict]:
     entries = []
     for filepath in md_files:
         filename = filepath.split("/")[-1]
+        # list_files_in_dir returns paths relative to the queried directory,
+        # but get_file_contents needs full vault-relative paths.
+        full_path = f"{concern_path}/{filepath}" if not filepath.startswith(concern_path) else filepath
         match = re.match(r"^(\d{2})-", filename)
         order = int(match.group(1)) if match else 99
-        entries.append({"path": filepath, "order": order, "filename": filename})
+        entries.append({"path": full_path, "order": order, "filename": filename})
 
     entries.sort(key=lambda e: e["order"])
     return entries
