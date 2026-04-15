@@ -238,7 +238,11 @@ def build_catalog(api: Any) -> dict:
             note_entry["meeting_series"] = series_slug
             note_entry["meeting_date"] = series_date
 
-        notes.append(note_entry)
+        # Exclude ephemeral categories from notes list — they grow unboundedly
+        # and are always accessed directly by date, not via catalog search.
+        # They still appear in the concerns index.
+        if category not in ("daily-log", "weekly-planning"):
+            notes.append(note_entry)
 
         # Build concern index
         if concern_slug and concern_path:
