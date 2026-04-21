@@ -241,7 +241,8 @@ def build_catalog(api: Any) -> dict:
         # Exclude ephemeral categories from notes list — they grow unboundedly
         # and are always accessed directly by date, not via catalog search.
         # They still appear in the concerns index.
-        if category not in ("daily-log", "weekly-planning"):
+        # Also exclude _system/ files — they are vault governance, not user content.
+        if category not in ("daily-log", "weekly-planning", "system"):
             notes.append(note_entry)
 
         # Build concern index
@@ -379,7 +380,7 @@ def filter_catalog(
     if status:
         notes = [n for n in notes if n.get("status") == status]
 
-    return {
+    result: dict = {
         "generated": catalog.get("generated", ""),
         "filter": {
             "category": category,
@@ -390,6 +391,26 @@ def filter_catalog(
         "matched_notes": len(notes),
         "notes": notes,
     }
+
+    # Some categories (daily-log, weekly-planning) are excluded from the notes
+    # array in build_catalog because they grow unboundedly. Their entries live
+    # only in the concerns index. When filtering by such a category, surface the
+    # matching concerns so the caller can still find them.
+    NOTES_EXCLUDED_CATEGORIES = {"daily-log", "weekly-planning"}
+    if category in NOTES_EXCLUDED_CATEGORIES:
+        all_concerns = catalog.get("concerns", {})
+        matched_concerns = {
+            slug: c for slug, c in all_concerns.items()
+            if c.get("category") == category
+        }
+        if matched_concerns:
+            result["concerns"] = matched_concerns
+            result["note"] = (
+                f"'{category}' notes are excluded from the notes index (accessed by path). "
+                f"Matching entries are in 'concerns' above."
+            )
+
+    return result
 
 
 def get_concern_files(api: Any, concern_path: str) -> list[dict]:
